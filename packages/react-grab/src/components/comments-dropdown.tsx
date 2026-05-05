@@ -1,6 +1,6 @@
 import { Show, For, onMount, onCleanup, createSignal, createEffect, on } from "solid-js";
 import type { Component } from "solid-js";
-import type { CommentItem, DropdownAnchor } from "../types.js";
+import type { AgentFeedbackStatus, CommentItem, DropdownAnchor } from "../types.js";
 import {
   DROPDOWN_EDGE_TRANSFORM_ORIGIN,
   DROPDOWN_ICON_SIZE_PX,
@@ -15,6 +15,7 @@ import { createSafePolygonTracker } from "../utils/safe-polygon.js";
 import { cn } from "../utils/cn.js";
 import { IconTrash } from "./icons/icon-trash.jsx";
 import { IconCheck } from "./icons/icon-check.jsx";
+import { IconLoader } from "./icons/icon-loader.jsx";
 import { createMenuHighlight } from "../utils/create-menu-highlight.js";
 import { suppressMenuEvent } from "../utils/suppress-menu-event.js";
 import { createAnchoredDropdown } from "../utils/create-anchored-dropdown.js";
@@ -28,6 +29,8 @@ interface CommentsDropdownProps {
   onItemHover?: (commentItemId: string | null) => void;
   onCopyAll?: () => void;
   onCopyAllHover?: (isHovered: boolean) => void;
+  agentFeedbackStatus?: AgentFeedbackStatus | null;
+  onSendAgentFeedback?: () => void;
   onClearAll?: () => void;
   onDismiss?: () => void;
   onDropdownHover?: (isHovered: boolean) => void;
@@ -38,6 +41,21 @@ const getCommentItemDisplayName = (item: CommentItem): string => {
     return `${item.elementsCount} elements`;
   }
   return item.componentName ?? item.tagName;
+};
+
+const formatElapsedTime = (elapsedMs: number): string => {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+};
+
+const getAgentStatusLabel = (status: AgentFeedbackStatus): string => {
+  if (status.state === "failed") return "Failed";
+  if (status.state === "completed") return "Completed";
+  if (status.state === "starting") return "Starting";
+  return "Working";
 };
 
 export const CommentsDropdown: Component<CommentsDropdownProps> = (props) => {
@@ -225,9 +243,64 @@ export const CommentsDropdown: Component<CommentsDropdownProps> = (props) => {
                     <IconCheck size={DROPDOWN_ICON_SIZE_PX} class="text-black" />
                   </Show>
                 </button>
+                <button
+                  data-react-grab-ignore-events
+                  data-react-grab-comments-send
+                  aria-label="Send feedback"
+                  disabled={
+                    props.agentFeedbackStatus?.state === "starting" ||
+                    props.agentFeedbackStatus?.state === "working"
+                  }
+                  class="contain-layout shrink-0 flex items-center justify-center px-[5px] py-px rounded-sm bg-black text-white cursor-pointer transition-all hover:bg-black/80 disabled:cursor-default disabled:opacity-50 press-scale h-[17px]"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onSendAgentFeedback?.();
+                  }}
+                >
+                  <span class="text-[11px] leading-3.5 font-sans font-medium">Send</span>
+                </button>
               </div>
             </Show>
           </div>
+
+          <Show when={props.agentFeedbackStatus}>
+            {(status) => (
+              <div
+                data-react-grab-agent-status
+                class="contain-layout shrink-0 flex items-center justify-between gap-3 px-2 py-1 [border-top-width:0.5px] border-t-solid border-t-[#D9D9D9] bg-[#FAFAFA]"
+              >
+                <span class="min-w-0 flex items-center gap-1.5 text-[11px] leading-3.5 font-sans text-black/60">
+                  <Show
+                    when={status().state === "starting" || status().state === "working"}
+                    fallback={
+                      <span
+                        class={cn(
+                          "size-[7px] rounded-full",
+                          status().state === "completed" ? "bg-[#16A34A]" : "bg-[#DC2626]",
+                        )}
+                      />
+                    }
+                  >
+                    <IconLoader size={11} class="animate-spin text-black/45" />
+                  </Show>
+                  <span
+                    class={cn(
+                      "truncate",
+                      status().state === "failed" ? "text-[#B91C1C]" : "text-black/60",
+                    )}
+                    title={status().error}
+                  >
+                    {status().state === "failed" && status().error
+                      ? status().error
+                      : getAgentStatusLabel(status())}
+                  </span>
+                </span>
+                <span class="shrink-0 text-[10px] leading-3 font-sans tabular-nums text-black/35">
+                  {formatElapsedTime(status().elapsedMs)}
+                </span>
+              </div>
+            )}
+          </Show>
 
           <div class="min-h-0 [border-top-width:0.5px] border-t-solid border-t-[#D9D9D9] px-2 py-1.5">
             <div

@@ -6,6 +6,7 @@ dist
 .next
 **/*.tgz
 coverage
+logs/
 react-grab-extension.zip
 apps/website/public/script.js
 test-results

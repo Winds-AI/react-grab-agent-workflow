@@ -168,6 +168,8 @@ export const ReactGrabRenderer: Component<ReactGrabRendererProps> = (props) => {
         onItemHover={props.onCommentItemHover}
         onCopyAll={props.onCommentsCopyAll}
         onCopyAllHover={props.onCommentsCopyAllHover}
+        agentFeedbackStatus={props.agentFeedbackStatus}
+        onSendAgentFeedback={props.onSendAgentFeedback}
         onClearAll={props.onCommentsClear}
         onDismiss={props.onCommentsDismiss}
         onDropdownHover={props.onCommentsDropdownHover}

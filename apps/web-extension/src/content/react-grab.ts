@@ -1,13 +1,16 @@
 import { init } from "react-grab/core";
 import type { Options, ReactGrabAPI } from "react-grab";
 import TurndownService from "turndown";
-import { LOCALHOST_INIT_DELAY_MS, STATE_QUERY_TIMEOUT_MS } from "../constants.js";
+import { STATE_QUERY_TIMEOUT_MS } from "../constants.js";
 
 declare global {
   interface Window {
     __REACT_GRAB__?: ReactGrabAPI;
+    __REACT_GRAB_EXTENSION_AGENT_FEEDBACK__?: boolean;
   }
 }
+
+window.__REACT_GRAB_EXTENSION_AGENT_FEEDBACK__ = true;
 
 const isLocalhost =
   window.location.hostname === "localhost" ||
@@ -71,7 +74,7 @@ const createExtensionApi = (): ReactGrabAPI => {
 };
 
 const getActiveApi = (): ReactGrabAPI | null => {
-  return extensionApi ?? window.__REACT_GRAB__ ?? null;
+  return extensionApi;
 };
 
 const initializeReactGrab = (): Promise<ReactGrabAPI | null> => {
@@ -82,21 +85,7 @@ const initializeReactGrab = (): Promise<ReactGrabAPI | null> => {
   }
 
   if (isLocalhost) {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const delayedApi = getActiveApi();
-        if (delayedApi) {
-          extensionApi = delayedApi;
-          resolve(delayedApi);
-          return;
-        }
-        // Fall back to creating our own API if the page never announced one.
-        // Preserves the race window for pages that do install react-grab
-        // themselves, while keeping the extension functional on dev servers
-        // that don't.
-        resolve(createExtensionApi());
-      }, LOCALHOST_INIT_DELAY_MS);
-    });
+    return Promise.resolve(createExtensionApi());
   }
 
   const createdApi = createExtensionApi();
@@ -107,12 +96,12 @@ window.addEventListener("react-grab:init", (event) => {
   if (!(event instanceof CustomEvent)) return;
   const pageApi = event.detail;
   if (!pageApi) return;
-  if (extensionApi && extensionApi !== pageApi) {
-    extensionApi.dispose();
+  if (!extensionApi) {
+    return;
   }
-  extensionApi = pageApi;
-  window.__REACT_GRAB__ = pageApi;
-  subscribeToStateChanges(pageApi);
+  if (pageApi !== extensionApi && window.__REACT_GRAB__ !== extensionApi) {
+    window.__REACT_GRAB__ = extensionApi;
+  }
 });
 
 const handleToggle = async (enabled: boolean): Promise<void> => {

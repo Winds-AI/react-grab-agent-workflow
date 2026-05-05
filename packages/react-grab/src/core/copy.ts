@@ -14,7 +14,11 @@ interface CopyHooks {
   transformSnippet: (snippet: string, element: Element) => Promise<string>;
   transformCopyContent: (content: string, elements: Element[]) => Promise<string>;
   onAfterCopy: (elements: Element[], success: boolean) => void;
-  onCopySuccess: (elements: Element[], content: string) => void;
+  onCopySuccess: (
+    elements: Element[],
+    copiedContent: string,
+    generatedContextContent: string,
+  ) => void | Promise<void>;
   onCopyError: (error: Error) => void;
 }
 
@@ -26,6 +30,7 @@ export const tryCopyWithFallback = async (
 ): Promise<boolean> => {
   let didCopy = false;
   let copiedContent = "";
+  let generatedContextContent = "";
 
   await hooks.onBeforeCopy(elements);
 
@@ -58,6 +63,7 @@ export const tryCopyWithFallback = async (
 
     if (generatedContent.trim()) {
       const transformedContent = await hooks.transformCopyContent(generatedContent, elements);
+      generatedContextContent = transformedContent;
 
       copiedContent = extraPrompt ? `${extraPrompt}\n\n${transformedContent}` : transformedContent;
 
@@ -71,7 +77,7 @@ export const tryCopyWithFallback = async (
   }
 
   if (didCopy) {
-    hooks.onCopySuccess(elements, copiedContent);
+    await hooks.onCopySuccess(elements, copiedContent, generatedContextContent);
   }
   hooks.onAfterCopy(elements, didCopy);
 

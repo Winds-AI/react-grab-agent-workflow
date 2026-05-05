@@ -334,6 +334,74 @@ export interface SelectionLabelInstance {
   hideArrow?: boolean;
 }
 
+export interface CommentSourceFrame {
+  componentName?: string;
+  filePath?: string;
+  lineNumber?: number | null;
+  columnNumber?: number | null;
+  isServer?: boolean;
+  isSymbolicated?: boolean;
+}
+
+export interface CommentSourceMetadata {
+  filePath?: string;
+  lineNumber?: number | null;
+  columnNumber?: number | null;
+  componentName?: string;
+  stack: CommentSourceFrame[];
+  dependencyFramesOmitted?: number;
+}
+
+export interface CommentElementMetadata {
+  tagName: string;
+  selector: string;
+  id?: string;
+  className?: string;
+  role?: string;
+  ariaLabel?: string;
+  testId?: string;
+  name?: string;
+  title?: string;
+  text?: string;
+  attributes: Record<string, string>;
+}
+
+export interface CommentPageMetadata {
+  url: string;
+  origin: string;
+  pathname: string;
+  search: string;
+  hash: string;
+  title: string;
+}
+
+export interface CommentViewportMetadata {
+  width: number;
+  height: number;
+  scrollX: number;
+  scrollY: number;
+  devicePixelRatio: number;
+  visualViewport?: {
+    width: number;
+    height: number;
+    scale: number;
+    offsetLeft: number;
+    offsetTop: number;
+  };
+}
+
+export interface CommentTargetMetadata {
+  element: CommentElementMetadata;
+  source: CommentSourceMetadata;
+  bounds: OverlayBounds;
+}
+
+export interface CommentContextMetadata {
+  page: CommentPageMetadata;
+  viewport: CommentViewportMetadata;
+  targets: CommentTargetMetadata[];
+}
+
 export interface CommentItem {
   id: string;
   content: string;
@@ -343,8 +411,19 @@ export interface CommentItem {
   elementsCount?: number;
   previewBounds?: OverlayBounds[];
   elementSelectors?: string[];
+  context?: CommentContextMetadata;
   commentText?: string;
   timestamp: number;
+}
+
+export type AgentFeedbackStatusName = "starting" | "working" | "completed" | "failed";
+
+export interface AgentFeedbackStatus {
+  state: AgentFeedbackStatusName;
+  startedAt: number;
+  elapsedMs: number;
+  jobId?: string;
+  error?: string;
 }
 
 export interface ReactGrabRendererProps {
@@ -418,6 +497,8 @@ export interface ReactGrabRendererProps {
   onCommentItemHover?: (commentItemId: string | null) => void;
   onCommentsCopyAll?: () => void;
   onCommentsCopyAllHover?: (isHovered: boolean) => void;
+  agentFeedbackStatus?: AgentFeedbackStatus | null;
+  onSendAgentFeedback?: () => void;
   onCommentsClear?: () => void;
   onCommentsDismiss?: () => void;
   onCommentsDropdownHover?: (isHovered: boolean) => void;

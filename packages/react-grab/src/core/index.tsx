@@ -25,6 +25,7 @@ import {
 } from "../utils/native-raf.js";
 import {
   getStackContext,
+  getStack,
   getNearestComponentName,
   getComponentDisplayName,
   checkIsNextProject,
@@ -103,6 +104,12 @@ import type {
   ToolbarState,
   CommentItem,
   DropdownAnchor,
+  AgentFeedbackStatus,
+  CommentContextMetadata,
+  CommentElementMetadata,
+  CommentSourceFrame,
+  CommentSourceMetadata,
+  CommentViewportMetadata,
 } from "../types.js";
 import { DEFAULT_THEME } from "./theme.js";
 import { createPluginRegistry } from "./plugin-registry.js";
@@ -140,6 +147,8 @@ import { joinSnippets } from "../utils/join-snippets.js";
 import { generateId } from "../utils/generate-id.js";
 import { logRecoverableError } from "../utils/log-recoverable-error.js";
 import { getNearestEdge } from "../utils/get-nearest-edge.js";
+import { getAgentFeedbackStatus, sendAgentFeedback } from "../utils/agent-feedback.js";
+import { normalizeFilePath } from "../utils/normalize-file-path.js";
 
 const builtInPlugins = [copyPlugin, commentPlugin, copyHtmlPlugin, copyStylesPlugin, openPlugin];
 
@@ -157,6 +166,53 @@ interface CopyWithLabelOptions {
     height: number;
   };
 }
+
+const COMMENT_TEXT_MAX_LENGTH = 500;
+const COMMENT_ATTR_VALUE_MAX_LENGTH = 200;
+
+const COMMENT_ATTRIBUTE_NAMES = [
+  "id",
+  "class",
+  "role",
+  "aria-label",
+  "data-testid",
+  "data-test-id",
+  "data-test",
+  "data-cy",
+  "data-qa",
+  "name",
+  "title",
+  "href",
+  "type",
+] as const;
+
+const DEPENDENCY_FRAME_PATTERNS = [
+  "/node_modules/",
+  "node_modules/",
+  "/.pnpm/",
+  ".pnpm/",
+  "/.yarn/",
+  ".yarn/",
+  "/.npm/",
+  ".npm/",
+  "/.bun/",
+  ".bun/",
+  "/dist/",
+  "/build/",
+  "/.next/",
+  "/@vite/",
+  "/vite/",
+  "webpack-internal:///",
+] as const;
+
+const truncateMetadataValue = (value: string, maxLength: number): string =>
+  value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+
+const isDependencyFramePath = (filePath: string | undefined): boolean => {
+  if (!filePath) return false;
+  const normalizedPath = filePath.replaceAll("\\", "/");
+  return DEPENDENCY_FRAME_PATTERNS.some((pattern) => normalizedPath.includes(pattern));
+};
 
 interface BuildActionContextOptions {
   element: Element;
@@ -271,6 +327,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     );
     const [isToolbarSelectHovered, setIsToolbarSelectHovered] = createSignal(false);
     const [commentItems, setCommentItems] = createSignal<CommentItem[]>(loadComments());
+    const [agentFeedbackStatus, setAgentFeedbackStatus] =
+      createSignal<AgentFeedbackStatus | null>(null);
     const [commentsDropdownPosition, setCommentsDropdownPosition] =
       createSignal<DropdownAnchor | null>(null);
     const [toolbarMenuPosition, setToolbarMenuPosition] = createSignal<DropdownAnchor | null>(null);
@@ -280,6 +338,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
     const commentElementMap = new Map<string, Element[]>();
     const [clockFlashTrigger, setClockFlashTrigger] = createSignal(0);
     const [isCommentsHoverOpen, setIsCommentsHoverOpen] = createSignal(false);
+    let agentFeedbackElapsedIntervalId: ReturnType<typeof setInterval> | null = null;
+    let agentFeedbackPollTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let commentsHoverPreviews: { boxId: string; labelId: string | null }[] = [];
 
     const updateToolbarState = (updates: Partial<ToolbarState>) => {
@@ -738,16 +798,165 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       }
     };
 
-    const handleCopySuccessWithComments = (options: {
+    const createCommentPageMetadata = () => ({
+      url: window.location.href,
+      origin: window.location.origin,
+      pathname: window.location.pathname,
+      search: window.location.search,
+      hash: window.location.hash,
+      title: document.title,
+    });
+
+    const createCommentViewportMetadata = (): CommentViewportMetadata => ({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      devicePixelRatio: window.devicePixelRatio,
+      visualViewport: window.visualViewport
+        ? {
+            width: window.visualViewport.width,
+            height: window.visualViewport.height,
+            scale: window.visualViewport.scale,
+            offsetLeft: window.visualViewport.offsetLeft,
+            offsetTop: window.visualViewport.offsetTop,
+          }
+        : undefined,
+    });
+
+    const collectCommentAttributes = (element: Element): Record<string, string> => {
+      const attributes: Record<string, string> = {};
+      for (const { name, value } of element.attributes) {
+        if (
+          !COMMENT_ATTRIBUTE_NAMES.includes(name as (typeof COMMENT_ATTRIBUTE_NAMES)[number]) &&
+          !name.startsWith("aria-") &&
+          !name.startsWith("data-")
+        ) {
+          continue;
+        }
+        attributes[name] = truncateMetadataValue(value, COMMENT_ATTR_VALUE_MAX_LENGTH);
+      }
+      return attributes;
+    };
+
+    const createCommentElementMetadata = (
+      element: Element,
+      selector: string,
+    ): CommentElementMetadata => {
+      const attributes = collectCommentAttributes(element);
+      const text =
+        element instanceof HTMLElement
+          ? (element.innerText?.trim() ?? element.textContent?.trim() ?? "")
+          : (element.textContent?.trim() ?? "");
+
+      return {
+        tagName: getTagName(element),
+        selector,
+        id: element.id || undefined,
+        className: element.getAttribute("class") || undefined,
+        role: element.getAttribute("role") || undefined,
+        ariaLabel: element.getAttribute("aria-label") || undefined,
+        testId:
+          element.getAttribute("data-testid") ||
+          element.getAttribute("data-test-id") ||
+          element.getAttribute("data-test") ||
+          undefined,
+        name: element.getAttribute("name") || undefined,
+        title: element.getAttribute("title") || undefined,
+        text: text ? truncateMetadataValue(text, COMMENT_TEXT_MAX_LENGTH) : undefined,
+        attributes,
+      };
+    };
+
+    const normalizeStackFilePath = (fileName: string | undefined): string | undefined => {
+      if (!fileName) return undefined;
+      try {
+        return normalizeFilePath(fileName);
+      } catch {
+        return fileName;
+      }
+    };
+
+    const createCommentSourceMetadata = async (
+      element: Element,
+    ): Promise<CommentSourceMetadata> => {
+      const [source, stack] = await Promise.all([resolveSource(element), getStack(element)]);
+      const allFrames: CommentSourceFrame[] = (stack ?? [])
+        .map((frame) => ({
+          componentName: frame.functionName ?? undefined,
+          filePath: normalizeStackFilePath(frame.fileName),
+          lineNumber: frame.lineNumber ?? null,
+          columnNumber: frame.columnNumber ?? null,
+          isServer: frame.isServer,
+          isSymbolicated: frame.isSymbolicated,
+        }))
+        .filter((frame) => frame.componentName || frame.filePath);
+      const frames = allFrames.filter((frame) => !isDependencyFramePath(frame.filePath));
+      const dependencyFramesOmitted = allFrames.length - frames.length;
+
+      const componentName =
+        source?.componentName ?? getComponentDisplayName(element) ?? frames[0]?.componentName;
+
+      if (frames.length === 0 && source) {
+        frames.push({
+          componentName: componentName ?? undefined,
+          filePath: source.filePath,
+          lineNumber: source.lineNumber,
+          columnNumber: source.columnNumber,
+        });
+      }
+
+      return {
+        filePath: source?.filePath,
+        lineNumber: source?.lineNumber,
+        columnNumber: source?.columnNumber,
+        componentName: componentName ?? undefined,
+        stack: frames,
+        dependencyFramesOmitted: dependencyFramesOmitted > 0 ? dependencyFramesOmitted : undefined,
+      };
+    };
+
+    const createCommentContext = async (
+      elements: Element[],
+      selectors: string[],
+    ): Promise<CommentContextMetadata> => {
+      const targets = await Promise.all(
+        elements.map(async (element, index) => ({
+          element: createCommentElementMetadata(
+            element,
+            selectors[index] ?? createElementSelector(element),
+          ),
+          source: await createCommentSourceMetadata(element),
+          bounds: createElementBounds(element),
+        })),
+      );
+
+      return {
+        page: createCommentPageMetadata(),
+        viewport: createCommentViewportMetadata(),
+        targets,
+      };
+    };
+
+    const handleCopySuccessWithComments = async (options: {
       copiedElements: Element[];
-      content: string;
+      copiedContent: string;
+      generatedContextContent: string;
       extraPrompt: string | undefined;
       elementName: string | undefined;
       tagName: string | null;
       componentName: string | null;
     }) => {
-      const { copiedElements, content, extraPrompt, elementName, tagName, componentName } = options;
-      pluginRegistry.hooks.onCopySuccess(copiedElements, content);
+      const {
+        copiedElements,
+        copiedContent,
+        generatedContextContent,
+        extraPrompt,
+        elementName,
+        tagName,
+        componentName,
+      } = options;
+      pluginRegistry.hooks.onCopySuccess(copiedElements, copiedContent);
 
       if (!extraPrompt) return;
 
@@ -774,15 +983,17 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       const elementSelectors = copiedElements.map((copiedElement, index) =>
         createElementSelector(copiedElement, index === 0),
       );
+      const context = await createCommentContext(copiedElements, elementSelectors);
 
       const updatedCommentItems = addCommentItem({
-        content,
+        content: generatedContextContent,
         elementName: elementName ?? "element",
         tagName: tagName ?? "div",
         componentName: componentName ?? undefined,
         elementsCount: copiedElements.length,
         previewBounds: copiedElements.map((copiedElement) => createElementBounds(copiedElement)),
         elementSelectors,
+        context,
         commentText: extraPrompt,
         timestamp: Date.now(),
       });
@@ -823,10 +1034,15 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
           transformSnippet: pluginRegistry.hooks.transformSnippet,
           transformCopyContent: pluginRegistry.hooks.transformCopyContent,
           onAfterCopy: pluginRegistry.hooks.onAfterCopy,
-          onCopySuccess: (copiedElements: Element[], content: string) => {
-            handleCopySuccessWithComments({
+          onCopySuccess: (
+            copiedElements: Element[],
+            copiedContent: string,
+            generatedContextContent: string,
+          ) => {
+            return handleCopySuccessWithComments({
               copiedElements,
-              content,
+              copiedContent,
+              generatedContextContent,
               extraPrompt,
               elementName,
               tagName,
@@ -2717,6 +2933,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       }
       if (keydownSpamTimerId) window.clearTimeout(keydownSpamTimerId);
       clearCopyFeedbackCooldown();
+      stopAgentFeedbackTimers();
       if (dropdownTrackingFrameId !== null) {
         nativeCancelAnimationFrame(dropdownTrackingFrameId);
       }
@@ -3433,6 +3650,122 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
       });
     };
 
+    const stopAgentFeedbackTimers = () => {
+      if (agentFeedbackElapsedIntervalId !== null) {
+        clearInterval(agentFeedbackElapsedIntervalId);
+        agentFeedbackElapsedIntervalId = null;
+      }
+      if (agentFeedbackPollTimeoutId !== null) {
+        clearTimeout(agentFeedbackPollTimeoutId);
+        agentFeedbackPollTimeoutId = null;
+      }
+    };
+
+    const updateAgentFeedbackElapsed = (startedAt: number) => {
+      setAgentFeedbackStatus((currentStatus) => {
+        if (!currentStatus) return currentStatus;
+        return {
+          ...currentStatus,
+          elapsedMs: Date.now() - startedAt,
+        };
+      });
+    };
+
+    const startAgentFeedbackElapsedTimer = (startedAt: number) => {
+      if (agentFeedbackElapsedIntervalId !== null) {
+        clearInterval(agentFeedbackElapsedIntervalId);
+      }
+      agentFeedbackElapsedIntervalId = setInterval(() => {
+        updateAgentFeedbackElapsed(startedAt);
+      }, 250);
+    };
+
+    const pollAgentFeedbackJob = (jobId: string, startedAt: number) => {
+      agentFeedbackPollTimeoutId = setTimeout(() => {
+        void (async () => {
+          try {
+            const nextStatus = await getAgentFeedbackStatus(jobId);
+            const elapsedMs = Date.now() - startedAt;
+            setAgentFeedbackStatus({
+              state: nextStatus.state,
+              startedAt,
+              elapsedMs,
+              jobId,
+              error: nextStatus.error,
+            });
+
+            if (nextStatus.state === "completed" || nextStatus.state === "failed") {
+              stopAgentFeedbackTimers();
+              setAgentFeedbackStatus((currentStatus) =>
+                currentStatus
+                  ? {
+                      ...currentStatus,
+                      elapsedMs,
+                    }
+                  : currentStatus,
+              );
+              return;
+            }
+
+            pollAgentFeedbackJob(jobId, startedAt);
+          } catch (error) {
+            stopAgentFeedbackTimers();
+            setAgentFeedbackStatus({
+              state: "failed",
+              startedAt,
+              elapsedMs: Date.now() - startedAt,
+              jobId,
+              error: error instanceof Error ? error.message : "Failed to read agent status",
+            });
+          }
+        })();
+      }, 500);
+    };
+
+    const handleSendAgentFeedback = () => {
+      const currentCommentItems = commentItems();
+      if (currentCommentItems.length === 0) return;
+
+      const currentStatus = agentFeedbackStatus();
+      if (currentStatus?.state === "starting" || currentStatus?.state === "working") return;
+
+      clearCommentsHoverPreviews();
+      const startedAt = Date.now();
+      const combinedContent = joinSnippets(
+        currentCommentItems.map((commentItem) => commentItem.content),
+      );
+
+      stopAgentFeedbackTimers();
+      setAgentFeedbackStatus({ state: "starting", startedAt, elapsedMs: 0 });
+      startAgentFeedbackElapsedTimer(startedAt);
+
+      void (async () => {
+        try {
+          const response = await sendAgentFeedback({
+            comments: currentCommentItems,
+            combinedContent,
+            sentAt: startedAt,
+          });
+
+          setAgentFeedbackStatus({
+            state: response.state ?? "working",
+            startedAt,
+            elapsedMs: Date.now() - startedAt,
+            jobId: response.jobId,
+          });
+          pollAgentFeedbackJob(response.jobId, startedAt);
+        } catch (error) {
+          stopAgentFeedbackTimers();
+          setAgentFeedbackStatus({
+            state: "failed",
+            startedAt,
+            elapsedMs: Date.now() - startedAt,
+            error: error instanceof Error ? error.message : "Failed to send feedback",
+          });
+        }
+      })();
+    };
+
     const handleCommentItemHover = (commentItemId: string | null) => {
       clearCommentsHoverPreviews();
       if (!commentItemId) return;
@@ -3630,6 +3963,8 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
                 onCommentItemHover={handleCommentItemHover}
                 onCommentsCopyAll={handleCommentsCopyAll}
                 onCommentsCopyAllHover={handleCommentsCopyAllHover}
+                agentFeedbackStatus={agentFeedbackStatus()}
+                onSendAgentFeedback={handleSendAgentFeedback}
                 onCommentsClear={handleCommentsClear}
                 onCommentsDismiss={dismissCommentsDropdown}
                 onCommentsDropdownHover={handleCommentsDropdownHover}
@@ -3728,6 +4063,7 @@ export const init = (rawOptions?: Options): ReactGrabAPI => {
         disposeRenderer?.();
         cancelCommentsHoverOpenTimeout();
         cancelCommentsHoverCloseTimeout();
+        stopAgentFeedbackTimers();
         stopTrackingDropdownPosition();
         toolbarStateChangeCallbacks.clear();
         dispose();
