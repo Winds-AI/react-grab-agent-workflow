@@ -52,10 +52,7 @@ const transformReadme = () => {
   let content = fs.readFileSync(sourceReadme, "utf8");
 
   content = content
-    .replace(
-      /# <img .* \/>.*React Grab/m,
-      '# <img src="https://github.com/aidenybai/react-grab/blob/main/.github/public/logo.png?raw=true" width="60" align="center" /> Grab',
-    )
+    .replace(/^# React Grab/m, "# Grab")
     .replace(/bundlephobia\/minzip\/react-grab/g, "bundlephobia/minzip/grab")
     .replace(/bundlephobia\.com\/package\/react-grab/g, "bundlephobia.com/package/grab")
     .replace(/img\.shields\.io\/npm\/v\/react-grab/g, "img.shields.io/npm/v/grab")
