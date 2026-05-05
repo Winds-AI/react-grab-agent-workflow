@@ -1,197 +1,51 @@
-# React Grab
+# React Grab Agent Workflow
 
-[![version](https://img.shields.io/npm/v/react-grab?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/react-grab)
-[![downloads](https://img.shields.io/npm/dt/react-grab.svg?style=flat&colorA=000000&colorB=000000)](https://npmjs.com/package/react-grab)
+Lean React Grab fork for extension-based agent feedback capture.
 
-Select context for coding agents directly from your website
+This repo contains only the pieces needed for the current workflow:
 
-How? Point at any element and press **⌘C** (Mac) or **Ctrl+C** (Windows/Linux) to copy the file name, React component, and HTML source code.
+- `packages/react-grab`: React Grab core UI with comment queue, structured element context, send-feedback status UI, and extension-only feedback bridge.
+- `apps/web-extension`: Chrome MV3 extension that injects React Grab, captures the selected tab screenshot, and posts feedback to an agent endpoint.
+- `scripts/mock-agent-endpoint.mjs`: local mock receiver that logs payloads, crops screenshots to the selected element, and simulates agent status.
 
-It makes tools like Cursor, Claude Code, Copilot run up to [**3× faster**](https://react-grab.com/blog/intro) and more accurate.
-
-### [Try out a demo! →](https://react-grab.com)
-
-## Install
-
-Run this command at your project root (where `next.config.ts` or `vite.config.ts` is located):
+## Build
 
 ```bash
-npx grab@latest init
+pnpm install
+pnpm build
 ```
 
-## Connect to MCP
+The unpacked Chrome extension is built at:
+
+```text
+apps/web-extension/dist
+```
+
+## Run Mock Receiver
 
 ```bash
-npx grab@latest add mcp
+pnpm mock:agent-endpoint --port 8787
 ```
 
-## Usage
+The receiver handles:
 
-Once installed, hover over any UI element in your browser and press:
+- `POST /__react-grab-agent-feedback`
+- `GET /__react-grab-agent-feedback/:jobId`
 
-- **⌘C** (Cmd+C) on Mac
-- **Ctrl+C** on Windows/Linux
+Logs are written to `logs/react-grab-feedback.jsonl`; cropped screenshots are written under `logs/screenshots/`.
 
-This copies the element's context (file name, React component, and HTML source code) to your clipboard ready to paste into your coding agent. For example:
+## Configure Endpoint
 
-```js
-<a class="ml-auto inline-block text-sm" href="#">
-  Forgot your password?
-</a>
-in LoginForm at components/login-form.tsx:46:19
+The extension reads the receiver base URL from Chrome storage key:
+
+```text
+react_grab_agent_endpoint
 ```
 
-## Manual Installation
+If unset, it defaults to:
 
-If you're using a React framework or build tool, view instructions below:
-
-#### Next.js (App router)
-
-Add this inside of your `app/layout.tsx`:
-
-```jsx
-import Script from "next/script";
-
-export default function RootLayout({ children }) {
-  return (
-    <html>
-      <head>
-        {process.env.NODE_ENV === "development" && (
-          <Script
-            src="//unpkg.com/react-grab/dist/index.global.js"
-            crossOrigin="anonymous"
-            strategy="beforeInteractive"
-          />
-        )}
-      </head>
-      <body>{children}</body>
-    </html>
-  );
-}
+```text
+http://localhost:8787
 ```
 
-#### Next.js (Pages router)
-
-Add this into your `pages/_document.tsx`:
-
-```jsx
-import { Html, Head, Main, NextScript } from "next/document";
-
-export default function Document() {
-  return (
-    <Html lang="en">
-      <Head>
-        {process.env.NODE_ENV === "development" && (
-          <Script
-            src="//unpkg.com/react-grab/dist/index.global.js"
-            crossOrigin="anonymous"
-            strategy="beforeInteractive"
-          />
-        )}
-      </Head>
-      <body>
-        <Main />
-        <NextScript />
-      </body>
-    </Html>
-  );
-}
-```
-
-#### Vite
-
-Add this at the top of your main entry file (e.g., `src/main.tsx`):
-
-```tsx
-if (import.meta.env.DEV) {
-  import("react-grab");
-}
-```
-
-#### Webpack
-
-First, install React Grab:
-
-```bash
-npm install react-grab
-```
-
-Then add this at the top of your main entry file (e.g., `src/index.tsx` or `src/main.tsx`):
-
-```tsx
-if (process.env.NODE_ENV === "development") {
-  import("react-grab");
-}
-```
-
-## Plugins
-
-Use plugins to extend React Grab's built-in UI with context menu actions, toolbar menu items, lifecycle hooks, and theme overrides. Plugins run within React Grab.
-
-Register a plugin using the `registerPlugin` and `unregisterPlugin` exports:
-
-```js
-import { registerPlugin } from "react-grab";
-
-registerPlugin({
-  name: "my-plugin",
-  hooks: {
-    onElementSelect: (element) => {
-      console.log("Selected:", element.tagName);
-    },
-  },
-});
-```
-
-In React, register inside a `useEffect`:
-
-```jsx
-import { registerPlugin, unregisterPlugin } from "react-grab";
-
-useEffect(() => {
-  registerPlugin({
-    name: "my-plugin",
-    actions: [
-      {
-        id: "my-action",
-        label: "My Action",
-        shortcut: "M",
-        onAction: (context) => {
-          console.log("Action on:", context.element);
-          context.hideContextMenu();
-        },
-      },
-    ],
-  });
-
-  return () => unregisterPlugin("my-plugin");
-}, []);
-```
-
-Actions use a `target` field to control where they appear. Omit `target` (or set `"context-menu"`) for the right-click menu, or set `"toolbar"` for the toolbar dropdown:
-
-```js
-actions: [
-  {
-    id: "inspect",
-    label: "Inspect",
-    shortcut: "I",
-    onAction: (ctx) => console.dir(ctx.element),
-  },
-  {
-    id: "toggle-freeze",
-    label: "Freeze",
-    target: "toolbar",
-    isActive: () => isFrozen,
-    onAction: () => toggleFreeze(),
-  },
-];
-```
-
-See [`packages/react-grab/src/types.ts`](https://github.com/aidenybai/react-grab/blob/main/packages/react-grab/src/types.ts) for the full `Plugin`, `PluginHooks`, and `PluginConfig` interfaces.
-
-### License
-
-React Grab is MIT-licensed open-source software.
-
-_Thank you to [Andrew Luetgers](https://github.com/andrewluetgers) for donating the `grab` npm package name._
+For a remote sandbox receiver, set that storage value to the exposed receiver URL.

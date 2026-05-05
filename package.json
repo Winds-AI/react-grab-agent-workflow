@@ -1,16 +1,14 @@
 {
   "private": true,
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "apps/web-extension",
+    "packages/react-grab"
   ],
   "type": "module",
   "scripts": {
-    "build": "cp README.md packages/react-grab/README.md && turbo run build --filter=@react-grab/cli --filter=react-grab --filter=grab --filter=@react-grab/mcp",
-    "dev": "turbo run dev --filter=react-grab",
-    "test": "turbo run test",
-    "test:cli": "turbo run test --filter=@react-grab/cli",
-    "typecheck": "turbo run typecheck",
+    "build": "pnpm --filter react-grab build && pnpm --filter @react-grab/web-extension build",
+    "dev": "pnpm --filter react-grab dev",
+    "typecheck": "pnpm --filter react-grab typecheck",
     "lint": "vp lint",
     "lint:fix": "vp lint --fix",
     "format": "vp fmt",
@@ -23,7 +21,6 @@
   "devDependencies": {
     "@types/node": "^25.6.0",
     "@voidzero-dev/vite-plus-core": "^0.1.20",
-    "turbo": "^2.9.7",
     "typescript": "^6.0.3",
     "vite-plus": "^0.1.20"
   },

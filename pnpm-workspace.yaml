@@ -1,6 +1,6 @@
 packages:
-  - "apps/*"
-  - "packages/*"
+  - "apps/web-extension"
+  - "packages/react-grab"
 
 overrides:
   vite: npm:@voidzero-dev/vite-plus-core@^0.1.20
